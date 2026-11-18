@@ -5,9 +5,7 @@ import liquibase.Scope;
 import liquibase.analytics.AnalyticsFactory;
 import liquibase.analytics.AnalyticsListener;
 import liquibase.analytics.Event;
-import liquibase.analytics.LiquibaseAnalyticsListener;
 import liquibase.configuration.*;
-import liquibase.database.Database;
 import liquibase.exception.CommandExecutionException;
 import liquibase.exception.CommandValidationException;
 import liquibase.integration.commandline.LiquibaseCommandLineConfiguration;
@@ -18,7 +16,6 @@ import liquibase.listener.LiquibaseListener;
 import liquibase.logging.mdc.MdcKey;
 import liquibase.logging.mdc.MdcManager;
 import liquibase.logging.mdc.MdcObject;
-import liquibase.logging.mdc.MdcValue;
 import liquibase.logging.mdc.customobjects.ExceptionDetails;
 import liquibase.util.ExceptionUtil;
 import liquibase.util.StringUtil;
@@ -47,6 +44,8 @@ public class CommandScope {
     private static final String NO_PREFIX_REGEX = ".*\\.";
     public static final Pattern NO_PREFIX_PATTERN = Pattern.compile(NO_PREFIX_REGEX);
     private final CommandDefinition commandDefinition;
+
+    private final CommandOrchestrator orchestrator = new CommandOrchestrator();
 
     private final SortedMap<String, Object> argumentValues = new TreeMap<>();
 
@@ -104,7 +103,8 @@ public class CommandScope {
     public CommandScope(String... commandName) throws CommandExecutionException {
         setOutput(System.out);
 
-        final CommandFactory commandFactory = Scope.getCurrentScope().getSingleton(CommandFactory.class);
+        final CommandFactory commandFactory = Scope
+                .getCurrentScope().getSingleton(CommandFactory.class);
 
         this.commandDefinition = commandFactory.getCommandDefinition(commandName);
 
@@ -287,108 +287,58 @@ public class CommandScope {
 
             scopeValues.put(Scope.Attr.licenseTrackList.toString(), licenseTrackList);
             return Scope.child(scopeValues, () -> {
-                CommandResultsBuilder resultsBuilder = new CommandResultsBuilder(this, outputStream);
-                final List<CommandStep> pipeline = commandDefinition.getPipeline();
-                final List<CommandStep> executedCommands = new ArrayList<>();
-                Optional<Exception> thrownException = Optional.empty();
-                validate();
-                try {
-                    addOutputFileToMdc();
-                    for (CommandStep command : pipeline) {
-                        try {
-                            Scope.getCurrentScope().addMdcValue(MdcKey.LIQUIBASE_INTERNAL_COMMAND, getCommandStepName(command));
-                            Scope.getCurrentScope().getLog(CommandScope.class).fine(String.format("Executing internal command %s", getCommandStepName(command)));
-                            command.run(resultsBuilder);
-                        } catch (Exception runException) {
-                            // Suppress the exception for now so that we can run the cleanup steps even when encountering an exception.
-                            thrownException = Optional.of(runException);
-                            if (analyticsEvent != null){
-                                ExceptionUtil.doSilently(() -> {
-                                    analyticsEvent.setOperationOutcome(MdcValue.COMMAND_FAILED);
-                                });
-                            }
+                    CommandResultsBuilder resultsBuilder = new CommandResultsBuilder(this, outputStream);
+                    validate();
 
-                            Scope.getCurrentScope().addMdcValue(MdcKey.OPERATION_OUTCOME, MdcValue.COMMAND_FAILED, false);
-                            break;
-                        }
-                        executedCommands.add(command);
-                    }
+                    try {
+                        addOutputFileToMdc();
 
-                    // To find the correct database source if there was an exception
-                    // we need to examine the database connection prior to closing it.
-                    // That means this must run prior to any cleanup command steps.
-                    Database database = (Database) getDependency(Database.class);
-                    String source = null;
-                    if (database != null) {
-                        source = ExceptionDetails.findSource(database);
-                    }
+                        // Given to CommandOrchestrator
+                        return orchestrator.orchestrate(this, commandDefinition, resultsBuilder);
 
-                    // after executing our pipeline, runs cleanup in inverse order
-                    for (int i = executedCommands.size() - 1; i >= 0; i--) {
-                        CommandStep command = pipeline.get(i);
-                        if (command instanceof CleanUpCommandStep) {
-                            ((CleanUpCommandStep) command).cleanUp(resultsBuilder);
-                        }
-                    }
-                    if (thrownException.isPresent()) { // Now that we've executed all our cleanup, rethrow the exception if there was one
-                        if (!executedCommands.isEmpty()) {
-                            logPrimaryExceptionToMdc(thrownException.get(), source);
-                        }
-                        throw thrownException.get();
-                    } else {
+                    } catch (Exception e) {
                         if (analyticsEvent != null){
                             ExceptionUtil.doSilently(() -> {
-                                analyticsEvent.setOperationOutcome(MdcValue.COMMAND_SUCCESSFUL);
+                                analyticsEvent.setExceptionClass(e.getClass().getName());
                             });
                         }
 
-                        Scope.getCurrentScope().addMdcValue(MdcKey.OPERATION_OUTCOME, MdcValue.COMMAND_SUCCESSFUL, false);
-                    }
-                } catch (Exception e) {
-                    if (analyticsEvent != null){
-                        ExceptionUtil.doSilently(() -> {
-                            analyticsEvent.setExceptionClass(e.getClass().getName());
-                        });
-                    }
-
-                    if (e instanceof CommandExecutionException) {
-                        throw (CommandExecutionException) e;
-                    } else {
-                        throw new CommandExecutionException(e);
-                    }
-                } finally {
-                    try (MdcObject operationStopTime = Scope.getCurrentScope().addMdcValue(MdcKey.OPERATION_STOP_TIME, Instant.ofEpochMilli(new Date().getTime()).toString())) {
-                        Scope.getCurrentScope().getLog(getClass()).info("Command execution complete");
-                    }
-                    try {
-                        if (this.outputStream != null) {
-                            this.outputStream.flush();
-                        }
-                    } catch (Exception e) {
-                        Scope.getCurrentScope().getLog(getClass()).warning("Error flushing command output stream: " + e.getMessage(), e);
-                    }
-                    if (analyticsEvent != null){
-                        ExceptionUtil.doSilently(() -> {
-                            AnalyticsFactory analyticsFactory = Scope.getCurrentScope().getSingleton(AnalyticsFactory.class);
-                            if (parentAnalyticsEvent == null) {
-                                analyticsFactory.handleEvent(analyticsEvent);
-                            } else if (analyticsFactory.getListener().isEnabled()) {
-                                parentAnalyticsEvent.getChildEvents().add(analyticsEvent);
-                            }
-                        });
-                    }
-                    if ( Boolean.TRUE.equals(LicenseTrackingArgs.ENABLED.getCurrentValue())) {
-                        if (parentLicenseTrackList == null) {
-                            LicenseTrackingFactory licenseTrackingFactory = Scope.getCurrentScope().getSingleton(LicenseTrackingFactory.class);
-                            licenseTrackingFactory.handleEvent(licenseTrackList);
+                        if (e instanceof CommandExecutionException) {
+                            throw (CommandExecutionException) e;
                         } else {
-                            parentLicenseTrackList.getLicenseTracks().addAll(licenseTrackList.getLicenseTracks());
+                            throw new CommandExecutionException(e);
+                        }
+                    } finally {
+                        try (MdcObject operationStopTime = Scope.getCurrentScope().addMdcValue(MdcKey.OPERATION_STOP_TIME, Instant.ofEpochMilli(new Date().getTime()).toString())) {
+                            Scope.getCurrentScope().getLog(getClass()).info("Command execution complete");
+                        }
+                        try {
+                            if (this.outputStream != null) {
+                                this.outputStream.flush();
+                            }
+                        } catch (Exception e) {
+                            Scope.getCurrentScope().getLog(getClass()).warning("Error flushing command output stream: " + e.getMessage(), e);
+                        }
+                        if (analyticsEvent != null){
+                            ExceptionUtil.doSilently(() -> {
+                                AnalyticsFactory analyticsFactory = Scope.getCurrentScope().getSingleton(AnalyticsFactory.class);
+                                if (parentAnalyticsEvent == null) {
+                                    analyticsFactory.handleEvent(analyticsEvent);
+                                } else if (analyticsFactory.getListener().isEnabled()) {
+                                    parentAnalyticsEvent.getChildEvents().add(analyticsEvent);
+                                }
+                            });
+                        }
+                        if ( Boolean.TRUE.equals(LicenseTrackingArgs.ENABLED.getCurrentValue())) {
+                            if (parentLicenseTrackList == null) {
+                                LicenseTrackingFactory licenseTrackingFactory = Scope.getCurrentScope().getSingleton(LicenseTrackingFactory.class);
+                                licenseTrackingFactory.handleEvent(licenseTrackList);
+                            } else {
+                                parentLicenseTrackList.getLicenseTracks().addAll(licenseTrackList.getLicenseTracks());
+                            }
                         }
                     }
-                }
-
-                return resultsBuilder.build();
-            });
+                });
         } catch (CommandExecutionException | RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -489,26 +439,6 @@ public class CommandScope {
                 .setValueHandler(argument.getValueConverter())
                 .setValueObfuscator(argument.getValueObfuscator())
                 .buildTemporary();
-    }
-
-    /**
-     * Returns a string of the entire defined command names, joined together with spaces
-     *
-     * @param commandStep the command step to get the name of
-     * @return the full command step name definition delimited by spaces or an empty string if there are no defined command names
-     */
-    private String getCommandStepName(CommandStep commandStep) {
-        StringBuilder commandStepName = new StringBuilder();
-        String[][] commandDefinition = commandStep.defineCommandNames();
-        if (commandDefinition != null) {
-            for (String[] commandNames : commandDefinition) {
-                if (commandStepName.length() != 0) {
-                    commandStepName.append(" ");
-                }
-                commandStepName.append(String.join(" ", commandNames));
-            }
-        }
-        return commandStepName.toString();
     }
 
     /**
