@@ -47,7 +47,7 @@ public class CommandScope {
 
     private final CommandOrchestrator orchestrator = new CommandOrchestrator();
 
-    private final SortedMap<String, Object> argumentValues = new TreeMap<>();
+    private final ArgumentContainer argumentContainer = new ArgumentContainer();
 
     /**
      * Substring tokens (lowercase) that mark an argument key as credential-bearing.
@@ -156,8 +156,7 @@ public class CommandScope {
      * @see #addArgumentValue(CommandArgumentDefinition, Object) for a type-safe version
      */
     public CommandScope addArgumentValue(String argument, Object value) {
-        this.argumentValues.put(argument, value);
-
+        this.argumentContainer.addArgumentValue(argument, value);
         return this;
     }
 
@@ -165,8 +164,7 @@ public class CommandScope {
      * Adds the given key/value pair to the stored argument data.
      */
     public <T> CommandScope addArgumentValue(CommandArgumentDefinition<T> argument, T value) {
-        this.argumentValues.put(argument.getName(), value);
-
+        this.argumentContainer.addArgumentValue(argument, value);
         return this;
     }
 
@@ -367,10 +365,11 @@ public class CommandScope {
      * try-finally and call this in the {@code finally}.
      */
     public void clearCredentialArguments() {
-        if (argumentValues.isEmpty()) {
+        if (argumentContainer.getArgumentValues().isEmpty()) {
             return;
         }
-        for (Map.Entry<String, Object> entry : argumentValues.entrySet()) {
+        for (Map.Entry<?, ?> rawEntry : argumentContainer.getArgumentValues().entrySet()) {
+            Map.Entry<String, Object> entry = (Map.Entry<String, Object>) rawEntry;
             String key = entry.getKey();
             if (key == null) {
                 continue;
@@ -498,7 +497,7 @@ public class CommandScope {
 
         @Override
         protected Map<?, ?> getMap() {
-            return CommandScope.this.argumentValues;
+            return CommandScope.this.argumentContainer.getArgumentValues();
         }
 
         @Override
