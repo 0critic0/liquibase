@@ -134,7 +134,7 @@ class CommandScopeTest extends Specification {
 
         when:
         scope.clearCredentialArguments()
-        def values = scope.@argumentValues
+        def values = scope.argumentContainer.getArgumentValues()
 
         then:
         values["password"]               == "*****"
@@ -158,7 +158,7 @@ class CommandScopeTest extends Specification {
 
         then:
         noExceptionThrown()
-        scope.@argumentValues.isEmpty()
+        scope.argumentContainer.getArgumentValues().isEmpty()
     }
 
     def "clearCredentialArguments uses Locale.ROOT so Turkish-locale 'I' does not break the ASCII substring match"() {
@@ -184,7 +184,7 @@ class CommandScopeTest extends Specification {
 
         when:
         scope.clearCredentialArguments()
-        def values = scope.@argumentValues
+        def values = scope.argumentContainer.getArgumentValues()
 
         then:
         values["argument__APIKEY"]     == "*****"
@@ -226,9 +226,9 @@ class CommandScopeTest extends Specification {
         scope.execute()
 
         then:
-        scope.@argumentValues["password"]    == "supersecret-pw-12345"
-        scope.@argumentValues["requiredArg"] == "anything"
-        scope.@argumentValues["username"]    == "regular-user"
+        scope.argumentContainer.getArgumentValues()["password"]    == "supersecret-pw-12345"
+        scope.argumentContainer.getArgumentValues()["requiredArg"] == "anything"
+        scope.argumentContainer.getArgumentValues()["username"]    == "regular-user"
     }
 
     def "execute called twice on the same scope reads original credentials both times — regression for PostgreSQLIntegrationTest.testStatusRunDuringUpdate"() {
@@ -249,7 +249,7 @@ class CommandScopeTest extends Specification {
             @Override
             void run(CommandResultsBuilder resultsBuilder) throws Exception {
                 // Capture what the pipeline would have read at execute() time.
-                passwordsObservedByPipeline << resultsBuilder.getCommandScope().@argumentValues["password"]
+                passwordsObservedByPipeline << resultsBuilder.getCommandScope().argumentContainer.getArgumentValues()["password"]
             }
         }
 
@@ -262,8 +262,7 @@ class CommandScopeTest extends Specification {
         // All three executions saw the same original credential — none was redacted
         // between calls. This is the contract that re-use callers depend on.
         passwordsObservedByPipeline == ["supersecret-pw-12345", "supersecret-pw-12345", "supersecret-pw-12345"]
-        scope.@argumentValues["password"] == "supersecret-pw-12345"
-    }
+        scope.argumentContainer.getArgumentValues()["password"] == "supersecret-pw-12345"    }
 
     def "execute does NOT clear credentials even when the pipeline throws — opt-in semantics also apply on the failure path"() {
         // Counterpart to the success-path spec above: under the new opt-in semantics,
@@ -288,8 +287,7 @@ class CommandScopeTest extends Specification {
 
         then:
         thrown(liquibase.exception.CommandExecutionException)
-        scope.@argumentValues["password"] == "supersecret-pw-12345"
-    }
+        scope.argumentContainer.getArgumentValues()["password"] == "supersecret-pw-12345"    }
 
     def "caller-invoked try-finally pattern around execute clears credentials post-execution (CWE-316 wiring documented for CLI integrators)"() {
         // The pattern recommended for CLI / single-use callers: wrap execute() in
@@ -306,8 +304,7 @@ class CommandScopeTest extends Specification {
         MockCommandStep.logic = new MockCommandStep() {
             @Override
             void run(CommandResultsBuilder resultsBuilder) throws Exception {
-                passwordSeenByPipeline = resultsBuilder.getCommandScope().@argumentValues["password"]
-            }
+                passwordSeenByPipeline = resultsBuilder.getCommandScope().argumentContainer.getArgumentValues()["password"]            }
         }
 
         when:
@@ -319,8 +316,7 @@ class CommandScopeTest extends Specification {
 
         then:
         passwordSeenByPipeline == "supersecret-pw-12345"
-        scope.@argumentValues["password"] == "*****"
-    }
+        scope.argumentContainer.getArgumentValues()["password"] == "*****"    }
 
     def "ValueModifiers are used in getArgumentValue"() {
         when:
