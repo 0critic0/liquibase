@@ -292,7 +292,7 @@ public class CommandScope {
                         addOutputFileToMdc();
 
                         // Given to CommandOrchestrator
-                        return orchestrator.orchestrate(this, commandDefinition, resultsBuilder);
+                        return orchestrator.orchestrate(commandDefinition, resultsBuilder);
 
                     } catch (Exception e) {
                         if (analyticsEvent != null){
@@ -301,7 +301,7 @@ public class CommandScope {
                             });
                         }
 
-                        if (e instanceof CommandExecutionException) {
+                        if (e instanceof CommandExecutionException commandExecutionException) {
                             throw (CommandExecutionException) e;
                         } else {
                             throw new CommandExecutionException(e);

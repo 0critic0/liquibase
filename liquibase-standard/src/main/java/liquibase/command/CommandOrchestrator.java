@@ -8,7 +8,7 @@ import java.util.Optional;
 
 public class CommandOrchestrator {
 
-    public CommandResults orchestrate(CommandScope scope, CommandDefinition definition, CommandResultsBuilder resultsBuilder) throws Exception {
+    public CommandResults orchestrate(CommandDefinition definition, CommandResultsBuilder resultsBuilder) throws Exception {
         final List<CommandStep> pipeline = definition.getPipeline();
         final List<CommandStep> executedCommands = new ArrayList<>();
         Optional<Exception> thrownException = Optional.empty();
@@ -29,8 +29,8 @@ public class CommandOrchestrator {
         // Reverse Cleanup Loop
         for (int i = executedCommands.size() - 1; i >= 0; i--) {
             CommandStep command = pipeline.get(i);
-            if (command instanceof CleanUpCommandStep) {
-                ((CleanUpCommandStep) command).cleanUp(resultsBuilder);
+            if (command instanceof CleanUpCommandStep cleanUpStep) {
+                cleanUpStep.cleanUp(resultsBuilder);
             }
         }
 
@@ -47,7 +47,7 @@ public class CommandOrchestrator {
         String[][] commandDefinition = commandStep.defineCommandNames();
         if (commandDefinition != null) {
             for (String[] commandNames : commandDefinition) {
-                if (commandStepName.length() != 0) {
+                if (!commandStepName.isEmpty()) {
                     commandStepName.append(" ");
                 }
                 commandStepName.append(String.join(" ", commandNames));

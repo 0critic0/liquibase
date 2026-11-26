@@ -1,6 +1,5 @@
 package liquibase.command;
 
-import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
@@ -20,7 +19,7 @@ public class ArgumentContainer {
         this.argumentValues.put(argument.getName(), value);
     }
 
-    public Map<?, ?> getArgumentValues() {
+    public SortedMap<String, Object> getArgumentValues() {
         return this.argumentValues;
     }
 }
